@@ -1,0 +1,6 @@
+{
+  "name": "CampusX Marketplace",
+  "description": "A smart, AI-powered marketplace for college students to buy, sell, rent, and exchange items safely within their campus community.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["AI Recommendations", "Real-time Chat", "Marketplace"]
+}

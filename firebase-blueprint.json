@@ -1,0 +1,93 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Store student user profiles and preferences",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "major": { "type": "string", "description": "e.g., CSE, Civil, Mechanical" },
+        "year": { "type": "string", "description": "e.g., 1st, 2nd, 3rd, 4th" },
+        "bio": { "type": "string" },
+        "hostel": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "interests": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "role": { "type": "string", "enum": ["student", "admin"] }
+      },
+      "required": ["uid", "email"]
+    },
+    "Listing": {
+      "title": "Marketplace Listing",
+      "description": "Products listed for sale, rent, or exchange",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "sellerName": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "category": { "type": "string" },
+        "images": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "status": { "type": "string", "enum": ["available", "sold", "rented"] },
+        "type": { "type": "string", "enum": ["sell", "rent", "exchange"] },
+        "hostel": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sellerId", "title", "price", "category", "type", "status"]
+    },
+    "Conversation": {
+      "title": "Chat Conversation",
+      "description": "Metadata for a chat between buyer and seller",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "participantIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "listingId": { "type": "string" },
+        "lastMessage": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Message": {
+      "title": "Chat Message",
+      "description": "Individual message in a conversation",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/listings/{listingId}": {
+      "schema": "Listing",
+      "description": "Marketplace items"
+    },
+    "/conversations/{convId}": {
+      "schema": "Conversation",
+      "description": "Chat conversations"
+    },
+    "/conversations/{convId}/messages/{msgId}": {
+      "schema": "Message",
+      "description": "Messages within a conversation"
+    }
+  }
+}

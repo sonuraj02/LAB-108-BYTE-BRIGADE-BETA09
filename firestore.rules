@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // --- Entity Validations ---
+
+    function isValidUser(data) {
+      return data.uid == request.auth.uid 
+        && data.email is string 
+        && data.email.size() <= 256
+        && (data.get('displayName', '') is string && data.get('displayName', '').size() <= 100)
+        && (data.get('role', 'student') == 'student'); // Block self-admin assignment
+    }
+
+    function isValidListing(data) {
+      return data.sellerId == request.auth.uid
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 200
+        && data.description is string && data.description.size() <= 2000
+        && data.price is number && data.price >= 0
+        && data.category is string
+        && data.type in ['sell', 'rent', 'exchange']
+        && data.status in ['available', 'sold', 'rented']
+        && data.images is list && data.images.size() <= 10;
+    }
+
+    function isValidMessage(data, convId) {
+      let conv = get(/databases/$(database)/documents/conversations/$(convId)).data;
+      return request.auth.uid in conv.participantIds
+        && data.senderId == request.auth.uid
+        && data.text is string && data.text.size() <= 5000;
+    }
+
+    // --- Collections ---
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming()) 
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'major', 'year', 'bio', 'hostel', 'phoneNumber', 'interests']);
+    }
+
+    match /listings/{listingId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidListing(incoming());
+      allow update: if (isOwner(existing().sellerId) && isValidListing(incoming()))
+        || (isAdmin());
+      allow delete: if isOwner(existing().sellerId) || isAdmin();
+    }
+
+    match /conversations/{convId} {
+      allow get: if isSignedIn() && request.auth.uid in existing().participantIds;
+      allow list: if isSignedIn() && request.auth.uid in existing().participantIds;
+      allow create: if isSignedIn() && request.auth.uid in incoming().participantIds;
+      allow update: if isSignedIn() && request.auth.uid in existing().participantIds 
+        && incoming().diff(existing()).affectedKeys().hasOnly(['lastMessage', 'updatedAt']);
+
+      match /messages/{msgId} {
+        allow read: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participantIds;
+        allow create: if isSignedIn() && isValidMessage(incoming(), convId);
+      }
+    }
+
+    match /admins/{adminId} {
+      allow read: if isOwner(adminId);
+    }
+  }
+}
