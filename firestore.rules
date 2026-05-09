@@ -60,6 +60,7 @@ service cloud.firestore {
       let conv = get(/databases/$(database)/documents/conversations/$(convId)).data;
       return request.auth.uid in conv.participantIds
         && data.senderId == request.auth.uid
+        && data.participantIds == conv.participantIds // Sync check
         && data.text is string && data.text.size() <= 5000;
     }
 
@@ -89,7 +90,8 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly(['lastMessage', 'updatedAt']);
 
       match /messages/{msgId} {
-        allow read: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participantIds;
+        allow get: if isSignedIn() && request.auth.uid in existing().participantIds;
+        allow list: if isSignedIn() && request.auth.uid in existing().participantIds;
         allow create: if isSignedIn() && isValidMessage(incoming(), convId);
       }
     }

@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  auth, db 
+  auth, db, handleFirestoreError, OperationType 
 } from './lib/firebase';
 import { 
   signInWithPopup, 
@@ -82,20 +82,24 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setUser(user);
       if (user) {
-        const userDoc = await getDoc(doc(db, 'users', user.uid));
-        if (userDoc.exists()) {
-          setProfile(userDoc.data() as UserProfile);
-        } else {
-          const newProfile: UserProfile = {
-            uid: user.uid,
-            email: user.email!,
-            displayName: user.displayName || 'Student',
-            photoURL: user.photoURL || undefined,
-            role: 'student',
-            interests: []
-          };
-          await setDoc(doc(db, 'users', user.uid), newProfile);
-          setProfile(newProfile);
+        try {
+          const userDoc = await getDoc(doc(db, 'users', user.uid));
+          if (userDoc.exists()) {
+            setProfile(userDoc.data() as UserProfile);
+          } else {
+            const newProfile: UserProfile = {
+              uid: user.uid,
+              email: user.email!,
+              displayName: user.displayName || 'Student',
+              photoURL: user.photoURL || undefined,
+              role: 'student',
+              interests: []
+            };
+            await setDoc(doc(db, 'users', user.uid), newProfile);
+            setProfile(newProfile);
+          }
+        } catch (error) {
+          handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
         }
       } else {
         setProfile(null);
@@ -107,40 +111,50 @@ export default function App() {
 
   // Fetch Listings
   useEffect(() => {
-    const q = query(collection(db, 'listings'), orderBy('createdAt', 'desc'));
+    if (!user) return;
+    const path = 'listings';
+    const q = query(collection(db, path), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Listing));
       setListings(items);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
     });
     return unsubscribe;
-  }, []);
+  }, [user]);
 
   // Fetch Conversations
   useEffect(() => {
     if (!user) return;
+    const path = 'conversations';
     const q = query(
-      collection(db, 'conversations'), 
+      collection(db, path), 
       where('participantIds', 'array-contains', user.uid),
       orderBy('updatedAt', 'desc')
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setConversations(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Conversation)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
     });
     return unsubscribe;
   }, [user]);
 
   // Fetch Messages for active conversation
   useEffect(() => {
-    if (!activeConversation) return;
+    if (!user || !activeConversation) return;
+    const path = `conversations/${activeConversation.id}/messages`;
     const q = query(
-      collection(db, 'conversations', activeConversation.id, 'messages'),
+      collection(db, path),
       orderBy('createdAt', 'asc')
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
     });
     return unsubscribe;
-  }, [activeConversation]);
+  }, [user, activeConversation]);
 
   // AI Recommendations
   useEffect(() => {
@@ -205,16 +219,22 @@ export default function App() {
 
   const sendMessage = async (text: string) => {
     if (!user || !activeConversation) return;
+    const path = `conversations/${activeConversation.id}/messages`;
     const msg = {
       senderId: user.uid,
+      participantIds: activeConversation.participantIds, // Store for secure listing without get()
       text,
       createdAt: serverTimestamp()
     };
-    await addDoc(collection(db, 'conversations', activeConversation.id, 'messages'), msg);
-    await updateDoc(doc(db, 'conversations', activeConversation.id), {
-      lastMessage: text,
-      updatedAt: serverTimestamp()
-    });
+    try {
+      await addDoc(collection(db, path), msg);
+      await updateDoc(doc(db, 'conversations', activeConversation.id), {
+        lastMessage: text,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
   };
 
   if (loading) {
@@ -508,10 +528,13 @@ export default function App() {
               <ProfileView 
                 profile={profile} 
                 onUpdate={async (p) => {
+                  const path = `users/${user.uid}`;
                   try {
-                    await setDoc(doc(db, 'users', user.uid), p);
+                    await setDoc(doc(db, path), p);
                     setProfile(p);
-                  } catch (e) { console.error(e); }
+                  } catch (error) {
+                    handleFirestoreError(error, OperationType.WRITE, path);
+                  }
                 }} 
               />
             )}
@@ -855,6 +878,34 @@ function ListingForm({ user, listingToEdit, onClose }: { user: User, listingToEd
   });
   const [submitting, setSubmitting] = useState(false);
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    Array.from(files).forEach((file: File) => {
+      if (file.size > 500000) { // 500KB limit for base64 to keep firestore docs small
+        alert("Image too large. Please upload images smaller than 500KB.");
+        return;
+      }
+      
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData(prev => ({
+          ...prev,
+          images: [...prev.images, reader.result as string].slice(0, 5) // Limit to 5 images
+        }));
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const removeImage = (index: number) => {
+    setFormData(prev => ({
+      ...prev,
+      images: prev.images.filter((_, i) => i !== index)
+    }));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
@@ -875,7 +926,7 @@ function ListingForm({ user, listingToEdit, onClose }: { user: User, listingToEd
       }
       onClose();
     } catch (error) {
-      console.error(error);
+      handleFirestoreError(error, OperationType.WRITE, 'listings');
     } finally {
       setSubmitting(false);
     }
@@ -892,9 +943,9 @@ function ListingForm({ user, listingToEdit, onClose }: { user: User, listingToEd
         initial={{ opacity: 0, scale: 0.9, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.9, y: 20 }}
-        className="w-full max-w-xl bg-white rounded-[32px] overflow-hidden shadow-2xl relative z-10"
+        className="w-full max-w-xl bg-white rounded-[32px] overflow-hidden shadow-2xl relative z-10 max-h-[90vh] overflow-y-auto no-scrollbar"
       >
-        <div className="p-8 pb-0 flex justify-between items-center">
+        <div className="p-8 pb-0 flex justify-between items-center sticky top-0 bg-white z-10">
           <h2 className="text-2xl font-black">{listingToEdit ? 'Edit Item' : 'Post New Item'}</h2>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-all">
             <X size={20} />
@@ -903,6 +954,38 @@ function ListingForm({ user, listingToEdit, onClose }: { user: User, listingToEd
         
         <form onSubmit={handleSubmit} className="p-8 space-y-6">
           <div className="grid grid-cols-1 gap-4">
+            {/* Image Upload Area */}
+            <div>
+              <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-2 block">Upload Photos (Max 5)</label>
+              <div className="grid grid-cols-5 gap-2">
+                {formData.images.map((img, idx) => (
+                  <div key={idx} className="relative aspect-square rounded-xl overflow-hidden group border border-gray-100">
+                    <img src={img} className="w-full h-full object-cover" alt="" />
+                    <button 
+                      type="button"
+                      onClick={() => removeImage(idx)}
+                      className="absolute top-1 right-1 bg-black/50 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+                {formData.images.length < 5 && (
+                  <label className="aspect-square rounded-xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-400 hover:border-indigo-400 hover:text-indigo-400 cursor-pointer transition-all">
+                    <Camera size={20} />
+                    <span className="text-[8px] font-bold mt-1 uppercase">Add</span>
+                    <input 
+                      type="file" 
+                      accept="image/*" 
+                      multiple 
+                      className="hidden" 
+                      onChange={handleImageUpload} 
+                    />
+                  </label>
+                )}
+              </div>
+            </div>
+
             <div>
               <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1 block">Title</label>
               <input 
