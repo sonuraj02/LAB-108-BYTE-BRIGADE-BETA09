@@ -64,6 +64,13 @@ service cloud.firestore {
         && data.text is string && data.text.size() <= 5000;
     }
 
+    function isValidOffer(data) {
+      return data.buyerId == request.auth.uid
+        && data.price is number && data.price > 0
+        && data.status == 'pending'
+        && data.listingId is string;
+    }
+
     // --- Collections ---
 
     match /users/{userId} {
@@ -75,11 +82,20 @@ service cloud.firestore {
     }
 
     match /listings/{listingId} {
-      allow read: if isSignedIn();
+      allow read: if true;
       allow create: if isSignedIn() && isValidListing(incoming());
       allow update: if (isOwner(existing().sellerId) && isValidListing(incoming()))
         || (isAdmin());
       allow delete: if isOwner(existing().sellerId) || isAdmin();
+
+      match /offers/{offerId} {
+        allow read: if isSignedIn() && (isOwner(resource.data.buyerId) || isOwner(get(/databases/$(database)/documents/listings/$(listingId)).data.sellerId));
+        allow create: if isSignedIn() && isValidOffer(incoming());
+        allow update: if isSignedIn() && (
+          (isOwner(existing().buyerId) && incoming().diff(existing()).affectedKeys().hasOnly(['price'])) ||
+          (isOwner(get(/databases/$(database)/documents/listings/$(listingId)).data.sellerId) && incoming().diff(existing()).affectedKeys().hasOnly(['status']))
+        );
+      }
     }
 
     match /conversations/{convId} {

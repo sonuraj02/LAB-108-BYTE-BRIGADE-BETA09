@@ -12,7 +12,8 @@ import {
   GoogleAuthProvider, 
   onAuthStateChanged, 
   signOut,
-  User
+  User,
+  signInAnonymously
 } from 'firebase/auth';
 import { 
   collection, 
@@ -35,7 +36,8 @@ import {
   Listing, 
   UserProfile,
   Conversation,
-  Message
+  Message,
+  Offer
 } from './types';
 import { 
   Search, 
@@ -54,7 +56,9 @@ import {
   X,
   CreditCard,
   RefreshCw,
-  Clock
+  Clock,
+  Handshake,
+  CheckCircle2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ListingCard } from './components/ListingCard';
@@ -69,6 +73,7 @@ export default function App() {
   const [listings, setListings] = useState<Listing[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<Category | 'All'>('All');
+  const [selectedStatus, setSelectedStatus] = useState<'All' | 'available' | 'sold' | 'rented'>('available');
   const [selectedListing, setSelectedListing] = useState<Listing | null>(null);
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -76,6 +81,7 @@ export default function App() {
   const [recommendations, setRecommendations] = useState<Listing[]>([]);
   const [loading, setLoading] = useState(true);
   const [isListingFormOpen, setIsListingFormOpen] = useState(false);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
 
   // Authentication
   useEffect(() => {
@@ -86,7 +92,9 @@ export default function App() {
           const userDoc = await getDoc(doc(db, 'users', user.uid));
           if (userDoc.exists()) {
             setProfile(userDoc.data() as UserProfile);
-          } else {
+          } else if (!user.isAnonymous) {
+            // Only create profile automatically for Google users
+            // Anonymous students will create theirs during the custom login step
             const newProfile: UserProfile = {
               uid: user.uid,
               email: user.email!,
@@ -97,6 +105,10 @@ export default function App() {
             };
             await setDoc(doc(db, 'users', user.uid), newProfile);
             setProfile(newProfile);
+          } else {
+             // For anonymous users, we wait for the login modal to set the profile
+             // But if we already had a profile (re-login), fetch it
+             // (Added empty block for clarity)
           }
         } catch (error) {
           handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
@@ -111,7 +123,6 @@ export default function App() {
 
   // Fetch Listings
   useEffect(() => {
-    if (!user) return;
     const path = 'listings';
     const q = query(collection(db, path), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -121,7 +132,7 @@ export default function App() {
       handleFirestoreError(error, OperationType.LIST, path);
     });
     return unsubscribe;
-  }, [user]);
+  }, []);
 
   // Fetch Conversations
   useEffect(() => {
@@ -178,17 +189,71 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => signOut(auth);
+  const handleLogout = () => {
+    signOut(auth);
+    setView('marketplace');
+  };
+
+  const requireAuth = (callback: () => void) => {
+    if (!profile) {
+      setIsLoginModalOpen(true);
+    } else {
+      callback();
+    }
+  };
+
+  const handleCustomLogin = async (enrollment: string, dob: string) => {
+    try {
+      // For this campus demo, we'll use Anonymous Auth + Firestore Profile
+      // In a real app, you'd verify enrollment/dob on a backend
+      let currentUser = user;
+      if (!currentUser) {
+        const cred = await signInAnonymously(auth);
+        currentUser = cred.user;
+      }
+
+      const q = query(collection(db, 'users'), where('enrollmentNo', '==', enrollment));
+      const snap = await getDocs(q);
+      
+      let studentProfile: UserProfile;
+
+      if (!snap.empty) {
+        studentProfile = snap.docs[0].data() as UserProfile;
+        // Verify DOB (simple string check for this demo)
+        if (studentProfile.dob && studentProfile.dob !== dob) {
+          alert("Invalid DOB for this enrollment number.");
+          return;
+        }
+      } else {
+        // Create new profile
+        studentProfile = {
+          uid: currentUser!.uid,
+          email: `${enrollment}@campus.edu`,
+          displayName: `Student ${enrollment}`,
+          enrollmentNo: enrollment,
+          dob: dob,
+          role: 'student',
+          interests: []
+        };
+        await setDoc(doc(db, 'users', currentUser!.uid), studentProfile);
+      }
+      
+      setProfile(studentProfile);
+      setIsLoginModalOpen(false);
+    } catch (error) {
+      console.error("Custom Login Error:", error);
+    }
+  };
 
   const filteredListings = useMemo(() => {
     return listings.filter(l => {
       const matchesSearch = l.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
                           l.description.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesCategory = selectedCategory === 'All' || l.category === selectedCategory;
-      const isAvailable = l.status === 'available';
-      return matchesSearch && matchesCategory && isAvailable;
+      const matchesStatus = selectedStatus === 'All' || l.status === selectedStatus;
+      return matchesSearch && matchesCategory && matchesStatus;
     });
-  }, [listings, searchQuery, selectedCategory]);
+  }, [listings, searchQuery, selectedCategory, selectedStatus]);
 
   const startConversation = async (listing: Listing) => {
     if (!user) return;
@@ -249,34 +314,6 @@ export default function App() {
     );
   }
 
-  if (!user) {
-    return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center bg-white p-6">
-        <motion.div 
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="max-w-md w-full text-center"
-        >
-          <div className="mb-8 inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-indigo-600 text-white shadow-xl shadow-indigo-200">
-            <ShoppingCart size={40} />
-          </div>
-          <h1 className="text-4xl font-black text-gray-900 tracking-tight mb-4">CampusX</h1>
-          <p className="text-gray-500 mb-10 text-lg">The smarter way to buy, sell, and rent on campus. Exclusively for college students.</p>
-          
-          <button 
-            onClick={handleLogin}
-            className="w-full flex items-center justify-center gap-3 bg-white border-2 border-gray-100 py-4 px-6 rounded-2xl font-semibold text-gray-700 hover:border-indigo-600 hover:text-indigo-600 transition-all shadow-sm active:scale-95"
-          >
-            <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
-            Sign in with Google
-          </button>
-          
-          <p className="mt-8 text-xs text-gray-400 font-medium uppercase tracking-widest">Student Community Marketplace</p>
-        </motion.div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-screen bg-[#F8F9FA] text-gray-900 overflow-hidden font-sans">
       {/* Sidebar */}
@@ -299,36 +336,45 @@ export default function App() {
             icon={<Plus size={20} />} 
             label="Post Item" 
             active={isListingFormOpen} 
-            onClick={() => setIsListingFormOpen(true)} 
+            onClick={() => requireAuth(() => setIsListingFormOpen(true))} 
           />
           <NavItem 
             icon={<MessageCircle size={20} />} 
             label="Conversations" 
             active={view === 'chats'} 
-            onClick={() => setView('chats')} 
+            onClick={() => requireAuth(() => setView('chats'))} 
           />
           <NavItem 
             icon={<CreditCard size={20} />} 
             label="My Listings" 
             active={view === 'my-listings'} 
-            onClick={() => setView('my-listings')} 
+            onClick={() => requireAuth(() => setView('my-listings'))} 
           />
           <NavItem 
             icon={<UserIcon size={20} />} 
             label="Profile" 
             active={view === 'profile'} 
-            onClick={() => setView('profile')} 
+            onClick={() => requireAuth(() => setView('profile'))} 
           />
         </nav>
 
         <div className="p-4 mt-auto border-t border-gray-50">
-          <button 
-            onClick={handleLogout}
-            className="flex items-center gap-3 w-full px-4 py-3 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all font-medium text-sm"
-          >
-            <LogOut size={18} />
-            Logout
-          </button>
+          {profile ? (
+            <button 
+              onClick={handleLogout}
+              className="flex items-center gap-3 w-full px-4 py-3 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all font-medium text-sm"
+            >
+              <LogOut size={18} />
+              Logout
+            </button>
+          ) : (
+            <button 
+              onClick={() => setIsLoginModalOpen(true)}
+              className="flex items-center justify-center gap-3 w-full px-4 py-3 bg-indigo-600 text-white rounded-xl transition-all font-bold text-sm shadow-lg shadow-indigo-100"
+            >
+              Login to CampusX
+            </button>
+          )}
         </div>
       </aside>
 
@@ -347,15 +393,26 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4 ml-6">
-            <span className="text-right hidden sm:block">
-              <p className="text-sm font-semibold">{profile?.displayName}</p>
-              <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">{profile?.major || 'Unset Major'}</p>
-            </span>
-            <div 
-              className="w-10 h-10 rounded-full bg-indigo-100 bg-cover bg-center border-2 border-white shadow-sm cursor-pointer hover:border-indigo-400 transition-all"
-              style={{ backgroundImage: `url(${profile?.photoURL || 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + user.uid})` }}
-              onClick={() => setView('profile')}
-            />
+            {profile ? (
+              <>
+                <span className="text-right hidden sm:block">
+                  <p className="text-sm font-semibold">{profile.displayName}</p>
+                  <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">{profile.major || 'Unset Major'}</p>
+                </span>
+                <div 
+                  className="w-10 h-10 rounded-full bg-indigo-100 bg-cover bg-center border-2 border-white shadow-sm cursor-pointer hover:border-indigo-400 transition-all"
+                  style={{ backgroundImage: `url(${profile.photoURL || 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + profile.uid})` }}
+                  onClick={() => setView('profile')}
+                />
+              </>
+            ) : (
+              <button 
+                onClick={() => setIsLoginModalOpen(true)}
+                className="text-indigo-600 font-bold text-sm bg-indigo-50 px-4 py-2 rounded-xl hover:bg-indigo-100 transition-all"
+              >
+                Sign In
+              </button>
+            )}
           </div>
         </header>
 
@@ -363,25 +420,45 @@ export default function App() {
           <div className="max-w-6xl mx-auto p-6">
             {view === 'marketplace' && (
               <div className="space-y-10">
-                {/* Categories */}
-                <div className="flex gap-3 overflow-x-auto pb-4 no-scrollbar">
-                  <CategoryChip 
-                    label="All" 
-                    active={selectedCategory === 'All'} 
-                    onClick={() => setSelectedCategory('All')} 
-                  />
-                  {CATEGORIES.map(cat => (
-                    <CategoryChip 
-                      key={cat} 
-                      label={cat} 
-                      active={selectedCategory === cat} 
-                      onClick={() => setSelectedCategory(cat as Category)} 
-                    />
-                  ))}
+                {/* Categories and Status Filter */}
+                <div className="flex flex-col gap-6">
+                  <div className="flex items-center justify-between">
+                    <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar flex-1">
+                      <CategoryChip 
+                        label="All" 
+                        active={selectedCategory === 'All'} 
+                        onClick={() => setSelectedCategory('All')} 
+                      />
+                      {CATEGORIES.map(cat => (
+                        <CategoryChip 
+                          key={cat} 
+                          label={cat} 
+                          active={selectedCategory === cat} 
+                          onClick={() => setSelectedCategory(cat as Category)} 
+                        />
+                      ))}
+                    </div>
+                    
+                    <div className="ml-4 flex items-center gap-2 bg-white border border-gray-100 rounded-xl p-1 shadow-sm shrink-0">
+                      {(['available', 'sold', 'rented', 'All'] as const).map((status) => (
+                        <button
+                          key={status}
+                          onClick={() => setSelectedStatus(status)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold capitalize transition-all ${
+                            selectedStatus === status 
+                              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' 
+                              : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          {status}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
 
                 {/* AI Recommendations */}
-                {recommendations.length > 0 && selectedCategory === 'All' && !searchQuery && (
+                {profile && recommendations.length > 0 && selectedCategory === 'All' && !searchQuery && (
                   <section>
                     <div className="flex items-center gap-2 mb-6 text-indigo-600">
                       <Sparkles size={20} className="fill-indigo-600" />
@@ -424,7 +501,7 @@ export default function App() {
                       <Filter size={48} className="mb-4 opacity-20" />
                       <p className="text-lg font-medium">No listings found in this category</p>
                       <button 
-                        onClick={() => { setSelectedCategory('All'); setSearchQuery(''); }}
+                        onClick={() => { setSelectedCategory('All'); setSearchQuery(''); setSelectedStatus('available'); }}
                         className="mt-4 text-indigo-600 font-semibold hover:underline"
                       >
                         Reset filters
@@ -439,14 +516,15 @@ export default function App() {
               <ListingDetailView 
                 listing={selectedListing} 
                 onBack={() => setView('marketplace')} 
-                onContact={() => startConversation(selectedListing)}
-                isOwner={selectedListing.sellerId === user.uid}
+                onContact={() => requireAuth(() => startConversation(selectedListing))}
+                isOwner={profile?.uid === selectedListing.sellerId}
+                userProfile={profile}
               />
             )}
 
             {view === 'my-listings' && (
               <MyListingsView 
-                listings={listings.filter(l => l.sellerId === user.uid)}
+                listings={listings.filter(l => l.sellerId === profile?.uid)}
                 onEdit={(l) => { setSelectedListing(l); setIsListingFormOpen(true); }}
               />
             )}
@@ -500,10 +578,10 @@ export default function App() {
                         {messages.map(msg => (
                           <div 
                             key={msg.id} 
-                            className={`flex ${msg.senderId === user.uid ? 'justify-end' : 'justify-start'}`}
+                            className={`flex ${msg.senderId === profile?.uid ? 'justify-end' : 'justify-start'}`}
                           >
                             <div className={`max-w-[80%] p-4 rounded-2xl text-sm ${
-                              msg.senderId === user.uid 
+                              msg.senderId === profile?.uid 
                                 ? 'bg-indigo-600 text-white rounded-tr-none shadow-md shadow-indigo-100' 
                                 : 'bg-white text-gray-700 border border-gray-100 rounded-tl-none shadow-sm'
                             }`}>
@@ -528,7 +606,7 @@ export default function App() {
               <ProfileView 
                 profile={profile} 
                 onUpdate={async (p) => {
-                  const path = `users/${user.uid}`;
+                  const path = `users/${profile.uid}`;
                   try {
                     await setDoc(doc(db, path), p);
                     setProfile(p);
@@ -545,18 +623,29 @@ export default function App() {
       {/* Floating Action Button for Mobile */}
       <div className="md:hidden fixed bottom-6 right-6 z-50">
         <button 
-          onClick={() => setIsListingFormOpen(true)}
+          onClick={() => requireAuth(() => setIsListingFormOpen(true))}
           className="w-14 h-14 rounded-full bg-indigo-600 text-white shadow-xl flex items-center justify-center active:scale-95 transition-all"
         >
           <Plus size={24} />
         </button>
       </div>
 
+      {/* Auth Modal */}
+      <AnimatePresence>
+        {isLoginModalOpen && (
+          <AuthModal 
+            onClose={() => setIsLoginModalOpen(false)} 
+            onLogin={handleCustomLogin}
+            onGoogleLogin={handleLogin}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Listing Form Modal */}
       <AnimatePresence>
-        {isListingFormOpen && (
+        {isListingFormOpen && profile && (
           <ListingForm 
-            user={user}
+            user={profile}
             listingToEdit={selectedListing && view === 'my-listings' ? selectedListing : null}
             onClose={() => { setIsListingFormOpen(false); setSelectedListing(null); }} 
           />
@@ -606,7 +695,10 @@ function CategoryChip({ label, active, onClick }: CategoryChipProps) {
   );
 }
 
-function ListingDetailView({ listing, onBack, onContact, isOwner }: { listing: Listing, onBack: () => void, onContact: () => void, isOwner: boolean }) {
+function ListingDetailView({ listing, onBack, onContact, isOwner, userProfile }: { listing: Listing, onBack: () => void, onContact: () => void, isOwner: boolean, userProfile: UserProfile | null }) {
+  const [isOfferModalOpen, setIsOfferModalOpen] = useState(false);
+  const [offerSent, setOfferSent] = useState(false);
+
   return (
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
       <button onClick={onBack} className="flex items-center gap-2 text-gray-500 hover:text-indigo-600 font-semibold text-sm transition-all mb-4">
@@ -658,13 +750,30 @@ function ListingDetailView({ listing, onBack, onContact, isOwner }: { listing: L
           </div>
 
           {!isOwner ? (
-            <button 
-              onClick={onContact}
-              className="w-full bg-indigo-600 text-white py-4 px-6 rounded-2xl font-bold flex items-center justify-center gap-3 shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
-            >
-              <MessageCircle size={20} />
-              Contact Seller
-            </button>
+            <div className="space-y-3">
+              <button 
+                onClick={onContact}
+                className="w-full bg-indigo-600 text-white py-4 px-6 rounded-2xl font-bold flex items-center justify-center gap-3 shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
+              >
+                <MessageCircle size={20} />
+                Contact Seller
+              </button>
+              
+              {offerSent ? (
+                <div className="flex items-center justify-center gap-2 py-4 bg-green-50 text-green-700 rounded-2xl font-bold border border-green-100 animate-pulse">
+                  <CheckCircle2 size={20} />
+                  Offer Sent!
+                </div>
+              ) : (
+                <button 
+                  onClick={() => setIsOfferModalOpen(true)}
+                  className="w-full bg-white border-2 border-indigo-600 text-indigo-600 py-4 px-6 rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-indigo-50 transition-all active:scale-95"
+                >
+                  <Handshake size={20} />
+                  Make an Offer
+                </button>
+              )}
+            </div>
           ) : (
             <div className="p-4 rounded-2xl border-2 border-dashed border-gray-100 text-center text-gray-400 font-semibold">
               This is your listing
@@ -672,6 +781,21 @@ function ListingDetailView({ listing, onBack, onContact, isOwner }: { listing: L
           )}
         </div>
       </div>
+
+      <AnimatePresence>
+        {isOfferModalOpen && (
+          <MakeOfferModal 
+            listing={listing} 
+            userProfile={userProfile}
+            onClose={() => setIsOfferModalOpen(false)}
+            onSuccess={() => {
+              setIsOfferModalOpen(false);
+              setOfferSent(true);
+              setTimeout(() => setOfferSent(false), 5000);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
@@ -864,9 +988,138 @@ function ChatInput({ onSend }: { onSend: (text: string) => void }) {
       </button>
     </form>
   );
+}function AuthModal({ onClose, onLogin, onGoogleLogin }: { onClose: () => void, onLogin: (enroll: string, dob: string) => void, onGoogleLogin: () => void }) {
+  const [enroll, setEnroll] = useState('');
+  const [dob, setDob] = useState('');
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="w-full max-w-md bg-white rounded-[32px] overflow-hidden shadow-2xl relative z-10 p-8">
+        <div className="flex justify-between items-center mb-8">
+           <h2 className="text-2xl font-black">Student Login</h2>
+           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-all"><X size={20} /></button>
+        </div>
+
+        <div className="space-y-6">
+           <div>
+              <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1 block">Enrollment Number</label>
+              <input 
+                className="w-full bg-gray-50 border-none rounded-xl py-3 px-4 text-sm focus:ring-2 focus:ring-indigo-100 outline-none"
+                placeholder="e.g., 2024CS001"
+                value={enroll}
+                onChange={e => setEnroll(e.target.value)}
+              />
+           </div>
+           <div>
+              <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1 block">Date of Birth</label>
+              <input 
+                type="date"
+                className="w-full bg-gray-50 border-none rounded-xl py-3 px-4 text-sm focus:ring-2 focus:ring-indigo-100 outline-none"
+                value={dob}
+                onChange={e => setDob(e.target.value)}
+              />
+           </div>
+
+           <button 
+             onClick={() => onLogin(enroll, dob)}
+             className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
+           >
+             Continue to Marketplace
+           </button>
+
+           <div className="relative flex items-center justify-center pt-4">
+              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-100"></div></div>
+              <span className="relative bg-white px-4 text-[10px] text-gray-300 font-bold uppercase tracking-widest">or</span>
+           </div>
+
+           <button 
+             onClick={onGoogleLogin}
+             className="w-full flex items-center justify-center gap-3 bg-white border border-gray-200 py-4 rounded-2xl font-semibold text-gray-600 hover:bg-gray-50 transition-all"
+           >
+             <img src="https://www.google.com/favicon.ico" className="w-4 h-4" alt="" />
+             Sign in with Google
+           </button>
+        </div>
+      </motion.div>
+    </div>
+  );
 }
 
-function ListingForm({ user, listingToEdit, onClose }: { user: User, listingToEdit: Listing | null, onClose: () => void }) {
+function MakeOfferModal({ listing, userProfile, onClose, onSuccess }: { listing: Listing, userProfile: UserProfile | null, onClose: () => void, onSuccess: () => void }) {
+  const [offerPrice, setOfferPrice] = useState(listing.price);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userProfile) return;
+    setSubmitting(true);
+    
+    try {
+      const offerData = {
+        listingId: listing.id,
+        buyerId: userProfile.uid,
+        buyerName: userProfile.displayName,
+        price: Number(offerPrice),
+        status: 'pending',
+        createdAt: serverTimestamp()
+      };
+      
+      const path = `listings/${listing.id}/offers`;
+      await addDoc(collection(db, path), offerData);
+      onSuccess();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `listings/${listing.id}/offers`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="w-full max-w-sm bg-white rounded-[32px] overflow-hidden shadow-2xl relative z-10 p-8"
+      >
+        <div className="flex justify-between items-center mb-6">
+           <h2 className="text-xl font-black">Make an Offer</h2>
+           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-all"><X size={20} /></button>
+        </div>
+
+        <p className="text-sm text-gray-500 mb-6 font-medium">Propose a price for <span className="text-gray-900 font-bold">{listing.title}</span>. The seller will be notified.</p>
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+           <div>
+              <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1 block">Your Offer Price (₹)</label>
+              <div className="relative">
+                <input 
+                  type="number"
+                  required
+                  min="1"
+                  className="w-full bg-gray-50 border-none rounded-xl py-4 px-4 text-xl font-bold focus:ring-2 focus:ring-indigo-100 outline-none"
+                  value={offerPrice}
+                  onChange={e => setOfferPrice(Number(e.target.value))}
+                />
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 font-bold">INR</span>
+              </div>
+              <p className="mt-2 text-[10px] text-gray-400 font-bold uppercase tracking-widest">Listed Price: ₹{listing.price}</p>
+           </div>
+
+           <button 
+             disabled={submitting}
+             type="submit"
+             className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95 disabled:opacity-50"
+           >
+             {submitting ? 'Sending...' : 'Send Offer'}
+           </button>
+        </form>
+      </motion.div>
+    </div>
+  );
+}
+
+function ListingForm({ user, listingToEdit, onClose }: { user: UserProfile, listingToEdit: Listing | null, onClose: () => void }) {
   const [formData, setFormData] = useState({
     title: listingToEdit?.title || '',
     description: listingToEdit?.description || '',

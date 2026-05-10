@@ -74,6 +74,20 @@
         "text": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       }
+    },
+    "Offer": {
+      "title": "Price Offer",
+      "description": "Negotiation offer for a listing",
+      "type": "object",
+      "properties": {
+        "listingId": { "type": "string" },
+        "buyerId": { "type": "string" },
+        "buyerName": { "type": "string" },
+        "price": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["listingId", "buyerId", "price", "status"]
     }
   },
   "firestore": {
@@ -84,6 +98,10 @@
     "/listings/{listingId}": {
       "schema": "Listing",
       "description": "Marketplace items"
+    },
+    "/listings/{listingId}/offers/{offerId}": {
+      "schema": "Offer",
+      "description": "Offers for a specific listing"
     },
     "/conversations/{convId}": {
       "schema": "Conversation",

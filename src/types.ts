@@ -2,6 +2,8 @@ export interface UserProfile {
   uid: string;
   email: string;
   displayName: string;
+  enrollmentNo?: string;
+  dob?: string;
   photoURL?: string;
   major?: string;
   year?: string;
@@ -40,6 +42,16 @@ export interface Message {
   id: string;
   senderId: string;
   text: string;
+  createdAt: any;
+}
+
+export interface Offer {
+  id: string;
+  listingId: string;
+  buyerId: string;
+  buyerName: string;
+  price: number;
+  status: 'pending' | 'accepted' | 'rejected';
   createdAt: any;
 }
 
